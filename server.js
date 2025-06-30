@@ -32,8 +32,8 @@ const authorizedUsers = new Set(); // Store authorized user IDs
 const userCustomMessages = new Map(); // userId -> custom message
 
 // Environment variables
-const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || 'https://n8n-z89h.onrender.com';
-const AUTH_TOKEN = process.env.AUTH_TOKEN || '7721301321:AAHrxdLERI16-JtrWcUy5E2-4EwrQQHnnRU';
+const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || 'https://your-n8n-service.onrender.com';
+const AUTH_TOKEN = process.env.AUTH_TOKEN || 'your-secret-token';
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID; // Your Telegram user ID
 
 // Middleware for authentication
@@ -232,7 +232,7 @@ app.get('/user-alarms/:userId', authenticate, (req, res) => {
 // Delete an alarm
 app.delete('/alarm/:alarmId', authenticate, (req, res) => {
     const { alarmId } = req.params;
-    const { userId } = req.query;
+    const { userId } = req.body;
     
     if (!authorizedUsers.has(userId) && userId !== ADMIN_USER_ID) {
         return res.status(403).json({ error: 'User not authorized' });
@@ -266,8 +266,7 @@ app.post('/snooze-alarm', authenticate, authorizeUser, (req, res) => {
     // Calculate snooze time (5 minutes later)
     const [hours, minutes] = originalTime.split(':').map(Number);
     const snoozeDate = new Date();
-    snoozeDate.setHours(hours, minutes, 0, 0);
-    snoozeDate.setMinutes(snoozeDate.getMinutes() + 5);
+    snoozeDate.setHours(hours, minutes + 5, 0, 0);
     
     // If snooze time is past midnight, set for tomorrow
     if (snoozeDate < new Date()) {
