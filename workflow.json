@@ -1,0 +1,390 @@
+{
+  "name": "Telegram Wake-up Call Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "telegram-wakeup-bot",
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$node[\"Telegram Trigger\"].json[\"message\"][\"text\"]}}",
+              "operation": "regex",
+              "value2": "^\\d{1,2}:\\d{2}|tomorrow|day after tomorrow"
+            }
+          ]
+        }
+      },
+      "name": "Check Time Format",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract message details\nconst message = $input.all()[0].json.message;\nconst timeText = message.text.trim();\nconst userId = message.from.id.toString();\nconst chatId = message.chat.id;\n\n// Parse different time formats\nlet timeString = timeText;\n\n// Handle commands like \"/cancel\", \"/snooze\", \"/status\"\nif (timeText.startsWith('/')) {\n  return [{\n    json: {\n      command: timeText.toLowerCase(),\n      userId: userId,\n      chatId: chatId,\n      isCommand: true\n    }\n  }];\n}\n\n// Validate time format\nconst timeRegex = /^(\\d{1,2}):(\\d{2})$/;\nconst tomorrowRegex = /tomorrow\\s+(\\d{1,2}):(\\d{2})/i;\nconst dayAfterRegex = /day after tomorrow\\s+(\\d{1,2}):(\\d{2})/i;\n\nlet isValid = false;\nlet extractedTime = '';\n\nif (tomorrowRegex.test(timeText)) {\n  isValid = true;\n  extractedTime = timeText;\n} else if (dayAfterRegex.test(timeText)) {\n  isValid = true;\n  extractedTime = timeText;\n} else if (timeRegex.test(timeText)) {\n  isValid = true;\n  extractedTime = timeText;\n}\n\nreturn [{\n  json: {\n    timeString: extractedTime,\n    userId: userId,\n    chatId: chatId,\n    phoneNumber: \"+919876543210\", // Replace with your phone number\n    message: \"Wake up! Time to start your day!\",\n    isValid: isValid,\n    isCommand: false,\n    originalText: timeText\n  }\n}];"
+      },
+      "name": "Parse Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        680,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$node[\"Parse Message\"].json[\"isCommand\"]}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Is Command?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$node[\"Parse Message\"].json[\"command\"]}}",
+              "value2": "/cancel"
+            }
+          ]
+        }
+      },
+      "name": "Command Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        400
+      ],
+      "parameters": {
+        "options": {
+          "allMatchingOutputs": false
+        },
+        "rules": {
+          "rules": [
+            {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{$node[\"Parse Message\"].json[\"command\"]}}",
+                    "value2": "/cancel"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "cancel"
+            },
+            {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{$node[\"Parse Message\"].json[\"command\"]}}",
+                    "value2": "/snooze"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "snooze"
+            },
+            {
+              "conditions": {
+                "string": [
+                  {
+                    "value1": "={{$node[\"Parse Message\"].json[\"command\"]}}",
+                    "value2": "/status"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "status"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:3000/set-alarm",
+        "options": {
+          "bodyContentType": "json",
+          "jsonBody": "={\n  \"timeString\": \"{{$node[\"Parse Message\"].json[\"timeString\"]}}\",\n  \"phoneNumber\": \"{{$node[\"Parse Message\"].json[\"phoneNumber\"]}}\",\n  \"message\": \"{{$node[\"Parse Message\"].json[\"message\"]}}\",\n  \"userId\": \"{{$node[\"Parse Message\"].json[\"userId\"]}}\"\n}",
+          "headers": {
+            "Content-Type": "application/json"
+          }
+        },
+        "method": "POST"
+      },
+      "name": "Set Alarm API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        1120,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:3000/cancel-alarm",
+        "options": {
+          "bodyContentType": "json",
+          "jsonBody": "={\n  \"userId\": \"{{$node[\"Parse Message\"].json[\"userId\"]}}\"\n}",
+          "headers": {
+            "Content-Type": "application/json"
+          }
+        },
+        "method": "POST"
+      },
+      "name": "Cancel Alarm API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        1340,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:3000/snooze-alarm",
+        "options": {
+          "bodyContentType": "json",
+          "jsonBody": "={\n  \"userId\": \"{{$node[\"Parse Message\"].json[\"userId\"]}}\",\n  \"minutes\": 10\n}",
+          "headers": {
+            "Content-Type": "application/json"
+          }
+        },
+        "method": "POST"
+      },
+      "name": "Snooze Alarm API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        1340,
+        450
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$node[\"Parse Message\"].json[\"chatId\"]}}",
+        "text": "=✅ Alarm set for {{$node[\"Set Alarm API\"].json[\"scheduledTime\"]}} IST\\n⏰ You'll receive a wake-up call in {{$node[\"Set Alarm API\"].json[\"delayMinutes\"]}} minutes\\n\\nCommands:\\n/cancel - Cancel alarm\\n/snooze - Snooze for 10 minutes\\n/status - Check alarm status"
+      },
+      "name": "Success Message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        200
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{$node[\"Parse Message\"].json[\"chatId\"]}}",
+        "text": "❌ Invalid time format!\\n\\nPlease use:\\n• HH:MM (24-hour format, e.g., 07:30, 17:45)\\n• tomorrow HH:MM\\n• day after tomorrow HH:MM\\n\\nOr use commands: /cancel, /snooze, /status"
+      },
+      "name": "Error Message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        680,
+        400
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{$node[\"Parse Message\"].json[\"chatId\"]}}",
+        "text": "=✅ {{$node[\"Cancel Alarm API\"].json[\"message\"]}}"
+      },
+      "name": "Cancel Response",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        350
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{$node[\"Parse Message\"].json[\"chatId\"]}}",
+        "text": "=⏰ {{$node[\"Snooze Alarm API\"].json[\"message\"]}}\\nNew time: {{$node[\"Snooze Alarm API\"].json[\"newScheduledTime\"]}} IST"
+      },
+      "name": "Snooze Response",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        450
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Check Time Format",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Time Format": {
+      "main": [
+        [
+          {
+            "node": "Parse Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Message": {
+      "main": [
+        [
+          {
+            "node": "Is Command?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Command?": {
+      "main": [
+        [
+          {
+            "node": "Command Type",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Alarm API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Command Type": {
+      "main": [
+        [
+          {
+            "node": "Cancel Alarm API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Snooze Alarm API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Alarm API": {
+      "main": [
+        [
+          {
+            "node": "Success Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cancel Alarm API": {
+      "main": [
+        [
+          {
+            "node": "Cancel Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Snooze Alarm API": {
+      "main": [
+        [
+          {
+            "node": "Snooze Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {}
+}

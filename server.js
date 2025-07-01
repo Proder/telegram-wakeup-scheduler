@@ -1,369 +1,237 @@
 const express = require('express');
-const cron = require('node-cron');
-const axios = require('axios');
-const rateLimit = require('express-rate-limit');
-const helmet = require('helmet');
+const twilio = require('twilio');
+const moment = require('moment-timezone');
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-// Security middlewares
-app.use(helmet());
-app.use(express.json({ limit: '10mb' }));
+// Twilio client
+const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
-// Rate limiting
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // limit each IP to 100 requests per windowMs
-    message: 'Too many requests from this IP, please try again later.'
-});
-app.use(limiter);
+app.use(express.json());
 
-// Stricter rate limit for scheduling endpoints
-const scheduleLimiter = rateLimit({
-    windowMs: 60 * 1000, // 1 minute
-    max: 10, // limit each IP to 10 schedule requests per minute
-    message: 'Too many scheduling requests, please try again later.'
-});
+// Store active timeouts in memory (will reset on server restart)
+const activeAlarms = new Map();
 
-// In-memory storage (for production, use Redis or Database)
-const activeSchedules = new Map();
-const userAlarms = new Map(); // userId -> array of alarms
-const authorizedUsers = new Set(); // Store authorized user IDs
-const userCustomMessages = new Map(); // userId -> custom message
-
-// Environment variables
-const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || 'https://your-n8n-service.onrender.com';
-const AUTH_TOKEN = process.env.AUTH_TOKEN || 'your-secret-token';
-const ADMIN_USER_ID = process.env.ADMIN_USER_ID; // Your Telegram user ID
-
-// Middleware for authentication
-const authenticate = (req, res, next) => {
-    const token = req.headers.authorization;
-    if (token !== `Bearer ${AUTH_TOKEN}`) {
-        return res.status(401).json({ error: 'Unauthorized' });
-    }
-    next();
-};
-
-// Middleware for user authorization
-const authorizeUser = (req, res, next) => {
-    const { userId } = req.body;
-    if (!authorizedUsers.has(userId) && userId !== ADMIN_USER_ID) {
-        return res.status(403).json({ error: 'User not authorized' });
-    }
-    next();
-};
-
-// Input validation
-const validateTimeFormat = (time) => {
-    const timeRegex = /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/;
-    return timeRegex.test(time);
-};
-
-const validateRecurrence = (recurrence) => {
-    const validTypes = ['none', 'daily', 'weekly', 'weekdays'];
-    return validTypes.includes(recurrence);
-};
-
-// Utility functions
-const generateAlarmId = () => {
-    return Date.now().toString() + Math.random().toString(36).substr(2, 5);
-};
-
-const parseCronExpression = (time, recurrence = 'none', dayOfWeek = null) => {
-    const [hours, minutes] = time.split(':').map(Number);
+// Parse time input and calculate delay
+function parseTimeInput(timeString) {
+  const now = moment.tz('Asia/Kolkata');
+  
+  // Handle different formats: "5:30", "17:30", "tomorrow 6:00", "day after tomorrow 7:30"
+  let targetTime;
+  
+  if (timeString.toLowerCase().includes('tomorrow')) {
+    const timeOnly = timeString.replace(/tomorrow\s*/i, '').trim();
+    targetTime = moment.tz('Asia/Kolkata').add(1, 'day');
+    const [hours, minutes] = timeOnly.split(':').map(Number);
+    targetTime.set({ hour: hours, minute: minutes, second: 0, millisecond: 0 });
+  } else if (timeString.toLowerCase().includes('day after tomorrow')) {
+    const timeOnly = timeString.replace(/day after tomorrow\s*/i, '').trim();
+    targetTime = moment.tz('Asia/Kolkata').add(2, 'days');
+    const [hours, minutes] = timeOnly.split(':').map(Number);
+    targetTime.set({ hour: hours, minute: minutes, second: 0, millisecond: 0 });
+  } else {
+    // Today
+    const [hours, minutes] = timeString.split(':').map(Number);
+    targetTime = moment.tz('Asia/Kolkata');
+    targetTime.set({ hour: hours, minute: minutes, second: 0, millisecond: 0 });
     
-    switch (recurrence) {
-        case 'daily':
-            return `${minutes} ${hours} * * *`;
-        case 'weekly':
-            const day = dayOfWeek || new Date().getDay();
-            return `${minutes} ${hours} * * ${day}`;
-        case 'weekdays':
-            return `${minutes} ${hours} * * 1-5`;
-        default:
-            // One-time alarm
-            const tomorrow = new Date();
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            return `${minutes} ${hours} ${tomorrow.getDate()} ${tomorrow.getMonth() + 1} *`;
+    // If time has passed today, schedule for tomorrow
+    if (targetTime.isBefore(now)) {
+      targetTime.add(1, 'day');
     }
-};
-
-const createScheduledTask = (alarmData) => {
-    const { alarmId, userId, time, cronExpression, recurrence, customMessage } = alarmData;
-    
-    const task = cron.schedule(cronExpression, async () => {
-        try {
-            // Trigger the n8n webhook to make the call
-            await axios.post(`${N8N_WEBHOOK_URL}/webhook/call-webhook`, {
-                userId: userId,
-                alarmId: alarmId,
-                customMessage: customMessage || 'Wake up! Time to start your day!',
-                time: time
-            }, {
-                headers: {
-                    'Authorization': `Bearer ${AUTH_TOKEN}`
-                }
-            });
-            
-            console.log(`Wake-up call triggered for user ${userId} at ${time}`);
-            
-            // If it's a one-time alarm, remove it after execution
-            if (recurrence === 'none') {
-                task.destroy();
-                activeSchedules.delete(alarmId);
-                
-                // Remove from user's alarm list
-                const userAlarmsList = userAlarms.get(userId) || [];
-                const updatedAlarms = userAlarmsList.filter(alarm => alarm.alarmId !== alarmId);
-                userAlarms.set(userId, updatedAlarms);
-            }
-            
-        } catch (error) {
-            console.error('Error making wake-up call:', error);
-        }
-    }, {
-        scheduled: false,
-        timezone: "Asia/Kolkata"
-    });
-    
-    return task;
-};
-
-// Initialize admin user
-if (ADMIN_USER_ID) {
-    authorizedUsers.add(ADMIN_USER_ID);
+  }
+  
+  return targetTime;
 }
 
-// Routes
+// Make call function
+async function makeCall(phoneNumber, message = null) {
+  try {
+    const callMessage = message || 'Wake up! This is your scheduled wake up call. Time to start your day!';
+    
+    const call = await twilioClient.calls.create({
+      twiml: `<Response><Say voice="alice">${callMessage}</Say><Pause length="2"/><Say voice="alice">Have a great day!</Say></Response>`,
+      to: phoneNumber,
+      from: process.env.TWILIO_PHONE_NUMBER
+    });
+    
+    console.log(`Call initiated: ${call.sid} to ${phoneNumber}`);
+    return call.sid;
+  } catch (error) {
+    console.error('Error making call:', error);
+    throw error;
+  }
+}
+
+// Set alarm endpoint
+app.post('/set-alarm', async (req, res) => {
+  try {
+    const { timeString, phoneNumber, message, userId } = req.body;
+    
+    if (!timeString || !phoneNumber) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: timeString and phoneNumber' 
+      });
+    }
+
+    const targetTime = parseTimeInput(timeString);
+    const now = moment.tz('Asia/Kolkata');
+    const delayMs = targetTime.diff(now);
+    
+    if (delayMs <= 0) {
+      return res.status(400).json({ 
+        error: 'Time has already passed' 
+      });
+    }
+
+    // Create unique alarm ID
+    const alarmId = `${userId}_${Date.now()}`;
+    
+    // Clear any existing alarm for this user
+    if (activeAlarms.has(userId)) {
+      clearTimeout(activeAlarms.get(userId).timeoutId);
+    }
+    
+    // Schedule the call
+    const timeoutId = setTimeout(async () => {
+      try {
+        await makeCall(phoneNumber, message);
+        activeAlarms.delete(userId);
+        console.log(`Wake up call completed for user: ${userId}`);
+      } catch (error) {
+        console.error('Error during scheduled call:', error);
+        activeAlarms.delete(userId);
+      }
+    }, delayMs);
+    
+    // Store alarm info
+    activeAlarms.set(userId, {
+      alarmId,
+      timeoutId,
+      scheduledTime: targetTime.format('YYYY-MM-DD HH:mm:ss'),
+      phoneNumber,
+      message
+    });
+
+    res.json({
+      success: true,
+      message: `Alarm set for ${targetTime.format('YYYY-MM-DD HH:mm:ss IST')}`,
+      alarmId,
+      scheduledTime: targetTime.format('YYYY-MM-DD HH:mm:ss'),
+      delayMinutes: Math.round(delayMs / 60000)
+    });
+
+  } catch (error) {
+    console.error('Error setting alarm:', error);
+    res.status(500).json({ error: 'Failed to set alarm' });
+  }
+});
+
+// Cancel alarm endpoint
+app.post('/cancel-alarm', (req, res) => {
+  try {
+    const { userId } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+    
+    if (activeAlarms.has(userId)) {
+      clearTimeout(activeAlarms.get(userId).timeoutId);
+      activeAlarms.delete(userId);
+      res.json({ success: true, message: 'Alarm cancelled' });
+    } else {
+      res.status(404).json({ error: 'No active alarm found for this user' });
+    }
+  } catch (error) {
+    console.error('Error cancelling alarm:', error);
+    res.status(500).json({ error: 'Failed to cancel alarm' });
+  }
+});
+
+// Snooze alarm endpoint
+app.post('/snooze-alarm', async (req, res) => {
+  try {
+    const { userId, minutes = 10 } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+    
+    if (!activeAlarms.has(userId)) {
+      return res.status(404).json({ error: 'No active alarm found for this user' });
+    }
+    
+    const alarm = activeAlarms.get(userId);
+    
+    // Cancel current alarm
+    clearTimeout(alarm.timeoutId);
+    
+    // Schedule new alarm after snooze minutes
+    const snoozeMs = minutes * 60 * 1000;
+    const newTimeoutId = setTimeout(async () => {
+      try {
+        await makeCall(alarm.phoneNumber, alarm.message);
+        activeAlarms.delete(userId);
+        console.log(`Snoozed wake up call completed for user: ${userId}`);
+      } catch (error) {
+        console.error('Error during snoozed call:', error);
+        activeAlarms.delete(userId);
+      }
+    }, snoozeMs);
+    
+    // Update alarm info
+    const newScheduledTime = moment.tz('Asia/Kolkata').add(minutes, 'minutes');
+    activeAlarms.set(userId, {
+      ...alarm,
+      timeoutId: newTimeoutId,
+      scheduledTime: newScheduledTime.format('YYYY-MM-DD HH:mm:ss')
+    });
+    
+    res.json({
+      success: true,
+      message: `Alarm snoozed for ${minutes} minutes`,
+      newScheduledTime: newScheduledTime.format('YYYY-MM-DD HH:mm:ss')
+    });
+    
+  } catch (error) {
+    console.error('Error snoozing alarm:', error);
+    res.status(500).json({ error: 'Failed to snooze alarm' });
+  }
+});
+
+// Get active alarms
+app.get('/active-alarms/:userId', (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (activeAlarms.has(userId)) {
+      const alarm = activeAlarms.get(userId);
+      res.json({
+        hasActiveAlarm: true,
+        scheduledTime: alarm.scheduledTime,
+        alarmId: alarm.alarmId
+      });
+    } else {
+      res.json({ hasActiveAlarm: false });
+    }
+  } catch (error) {
+    console.error('Error fetching active alarms:', error);
+    res.status(500).json({ error: 'Failed to fetch active alarms' });
+  }
+});
 
 // Health check
 app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'ok', 
-        activeSchedules: activeSchedules.size,
-        totalUsers: userAlarms.size,
-        uptime: process.uptime()
-    });
+  res.json({ 
+    status: 'OK', 
+    timestamp: moment.tz('Asia/Kolkata').format(),
+    activeAlarms: activeAlarms.size
+  });
 });
 
-// User authorization endpoint (admin only)
-app.post('/authorize-user', authenticate, (req, res) => {
-    const { userId, adminUserId } = req.body;
-    
-    if (adminUserId !== ADMIN_USER_ID) {
-        return res.status(403).json({ error: 'Only admin can authorize users' });
-    }
-    
-    authorizedUsers.add(userId);
-    res.json({ success: true, message: 'User authorized successfully' });
-});
-
-// Schedule a new alarm
-app.post('/webhook/schedule-alarm', scheduleLimiter, authenticate, authorizeUser, (req, res) => {
-    const { userId, time, recurrence = 'none', dayOfWeek, customMessage, label } = req.body;
-    
-    // Validate input
-    if (!validateTimeFormat(time)) {
-        return res.status(400).json({ error: 'Invalid time format. Use HH:MM (24-hour format)' });
-    }
-    
-    if (!validateRecurrence(recurrence)) {
-        return res.status(400).json({ error: 'Invalid recurrence type' });
-    }
-    
-    // Check user alarm limit (max 10 alarms per user)
-    const userAlarmsList = userAlarms.get(userId) || [];
-    if (userAlarmsList.length >= 10) {
-        return res.status(400).json({ error: 'Maximum 10 alarms allowed per user' });
-    }
-    
-    try {
-        const alarmId = generateAlarmId();
-        const cronExpression = parseCronExpression(time, recurrence, dayOfWeek);
-        
-        const alarmData = {
-            alarmId,
-            userId,
-            time,
-            recurrence,
-            dayOfWeek,
-            customMessage,
-            label: label || `Alarm at ${time}`,
-            createdAt: new Date().toISOString(),
-            cronExpression
-        };
-        
-        // Create and start the scheduled task
-        const task = createScheduledTask(alarmData);
-        task.start();
-        
-        // Store the task and alarm data
-        activeSchedules.set(alarmId, task);
-        userAlarmsList.push(alarmData);
-        userAlarms.set(userId, userAlarmsList);
-        
-        res.json({ 
-            success: true, 
-            message: 'Alarm scheduled successfully',
-            alarmId,
-            scheduledFor: time,
-            recurrence
-        });
-        
-    } catch (error) {
-        console.error('Error scheduling alarm:', error);
-        res.status(500).json({ error: 'Failed to schedule alarm' });
-    }
-});
-
-// Get user's alarms
-app.get('/user-alarms/:userId', authenticate, (req, res) => {
-    const { userId } = req.params;
-    
-    if (!authorizedUsers.has(userId) && userId !== ADMIN_USER_ID) {
-        return res.status(403).json({ error: 'User not authorized' });
-    }
-    
-    const userAlarmsList = userAlarms.get(userId) || [];
-    res.json({ alarms: userAlarmsList });
-});
-
-// Delete an alarm
-app.delete('/alarm/:alarmId', authenticate, (req, res) => {
-    const { alarmId } = req.params;
-    const { userId } = req.body;
-    
-    if (!authorizedUsers.has(userId) && userId !== ADMIN_USER_ID) {
-        return res.status(403).json({ error: 'User not authorized' });
-    }
-    
-    // Check if alarm exists and belongs to user
-    const userAlarmsList = userAlarms.get(userId) || [];
-    const alarmIndex = userAlarmsList.findIndex(alarm => alarm.alarmId === alarmId);
-    
-    if (alarmIndex === -1) {
-        return res.status(404).json({ error: 'Alarm not found' });
-    }
-    
-    // Stop and remove the scheduled task
-    if (activeSchedules.has(alarmId)) {
-        activeSchedules.get(alarmId).destroy();
-        activeSchedules.delete(alarmId);
-    }
-    
-    // Remove from user's alarm list
-    userAlarmsList.splice(alarmIndex, 1);
-    userAlarms.set(userId, userAlarmsList);
-    
-    res.json({ success: true, message: 'Alarm deleted successfully' });
-});
-
-// Snooze alarm (reschedule for 5 minutes later)
-app.post('/snooze-alarm', authenticate, authorizeUser, (req, res) => {
-    const { userId, originalTime } = req.body;
-    
-    // Calculate snooze time (5 minutes later)
-    const [hours, minutes] = originalTime.split(':').map(Number);
-    const snoozeDate = new Date();
-    snoozeDate.setHours(hours, minutes + 5, 0, 0);
-    
-    // If snooze time is past midnight, set for tomorrow
-    if (snoozeDate < new Date()) {
-        snoozeDate.setDate(snoozeDate.getDate() + 1);
-    }
-    
-    const snoozeTime = `${snoozeDate.getHours().toString().padStart(2, '0')}:${snoozeDate.getMinutes().toString().padStart(2, '0')}`;
-    
-    // Schedule snooze alarm
-    const alarmId = generateAlarmId();
-    const cronExpression = `${snoozeDate.getMinutes()} ${snoozeDate.getHours()} ${snoozeDate.getDate()} ${snoozeDate.getMonth() + 1} *`;
-    
-    const alarmData = {
-        alarmId,
-        userId,
-        time: snoozeTime,
-        recurrence: 'none',
-        label: `Snoozed alarm (${snoozeTime})`,
-        createdAt: new Date().toISOString(),
-        cronExpression
-    };
-    
-    const task = createScheduledTask(alarmData);
-    task.start();
-    
-    activeSchedules.set(alarmId, task);
-    const userAlarmsList = userAlarms.get(userId) || [];
-    userAlarmsList.push(alarmData);
-    userAlarms.set(userId, userAlarmsList);
-    
-    res.json({ 
-        success: true, 
-        message: `Alarm snoozed for 5 minutes (${snoozeTime})`,
-        snoozeTime 
-    });
-});
-
-// Set custom message
-app.post('/set-custom-message', authenticate, authorizeUser, (req, res) => {
-    const { userId, customMessage } = req.body;
-    
-    if (!customMessage || customMessage.length > 200) {
-        return res.status(400).json({ error: 'Custom message must be 1-200 characters long' });
-    }
-    
-    userCustomMessages.set(userId, customMessage);
-    res.json({ success: true, message: 'Custom message set successfully' });
-});
-
-// Get custom message
-app.get('/custom-message/:userId', authenticate, (req, res) => {
-    const { userId } = req.params;
-    
-    if (!authorizedUsers.has(userId) && userId !== ADMIN_USER_ID) {
-        return res.status(403).json({ error: 'User not authorized' });
-    }
-    
-    const customMessage = userCustomMessages.get(userId) || 'Wake up! Time to start your day!';
-    res.json({ customMessage });
-});
-
-// Admin endpoint to view all users and their alarms
-app.get('/admin/all-users', authenticate, (req, res) => {
-    const { adminUserId } = req.query;
-    
-    if (adminUserId !== ADMIN_USER_ID) {
-        return res.status(403).json({ error: 'Admin access required' });
-    }
-    
-    const allUsers = {};
-    for (const [userId, alarms] of userAlarms.entries()) {
-        allUsers[userId] = {
-            alarmCount: alarms.length,
-            alarms: alarms
-        };
-    }
-    
-    res.json({ 
-        totalUsers: userAlarms.size,
-        authorizedUsers: Array.from(authorizedUsers),
-        users: allUsers 
-    });
-});
-
-// Error handling middleware
-app.use((error, req, res, next) => {
-    console.error('Server error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-});
-
-// 404 handler
-app.use((req, res) => {
-    res.status(404).json({ error: 'Endpoint not found' });
-});
-
-const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Enhanced Scheduler Service running on port ${PORT}`);
-    console.log(`Authorized users: ${authorizedUsers.size}`);
+  console.log(`Webhook service running on port ${PORT}`);
+  console.log(`Health check: http://localhost:${PORT}/health`);
 });
