@@ -116,38 +116,49 @@ app.post('/set-alarm', async (req, res) => {
     // Create unique alarm ID
     const alarmId = `${userId}_${Date.now()}`;
     
+    // Ensure userId is stored as string for consistent comparison
+    const userIdString = userId ? userId.toString() : null;
+    
+    console.log('Setting alarm for userId:', userIdString);
+    
     // Clear any existing alarm for this user
-    if (activeAlarms.has(userId)) {
-      clearTimeout(activeAlarms.get(userId).timeoutId);
+    if (activeAlarms.has(userIdString)) {
+      console.log('Clearing existing alarm for user:', userIdString);
+      clearTimeout(activeAlarms.get(userIdString).timeoutId);
     }
     
     // Schedule the call
     const timeoutId = setTimeout(async () => {
       try {
         await makeCall(phoneNumber, message);
-        activeAlarms.delete(userId);
-        console.log(`Wake up call completed for user: ${userId}`);
+        activeAlarms.delete(userIdString);
+        console.log(`Wake up call completed for user: ${userIdString}`);
       } catch (error) {
         console.error('Error during scheduled call:', error);
-        activeAlarms.delete(userId);
+        activeAlarms.delete(userIdString);
       }
     }, delayMs);
     
     // Store alarm info
-    activeAlarms.set(userId, {
+    activeAlarms.set(userIdString, {
       alarmId,
       timeoutId,
       scheduledTime: targetTime.format('YYYY-MM-DD HH:mm:ss'),
       phoneNumber,
-      message
+      message,
+      userId: userIdString
     });
+
+    console.log('Alarm stored for user:', userIdString);
+    console.log('Current active alarms:', Array.from(activeAlarms.keys()));
 
     res.json({
       success: true,
       message: `Alarm set for ${targetTime.format('YYYY-MM-DD HH:mm:ss IST')}`,
       alarmId,
       scheduledTime: targetTime.format('YYYY-MM-DD HH:mm:ss'),
-      delayMinutes: Math.round(delayMs / 60000)
+      delayMinutes: Math.round(delayMs / 60000),
+      userId: userIdString // Adding this for debugging
     });
 
   } catch (error) {
@@ -165,11 +176,16 @@ app.post('/cancel-alarm', (req, res) => {
       return res.status(400).json({ error: 'userId is required' });
     }
     
-    if (activeAlarms.has(userId)) {
-      clearTimeout(activeAlarms.get(userId).timeoutId);
-      activeAlarms.delete(userId);
+    const userIdString = userId.toString();
+    console.log('Cancelling alarm for userId:', userIdString);
+    
+    if (activeAlarms.has(userIdString)) {
+      clearTimeout(activeAlarms.get(userIdString).timeoutId);
+      activeAlarms.delete(userIdString);
+      console.log('Alarm cancelled for user:', userIdString);
       res.json({ success: true, message: 'Alarm cancelled' });
     } else {
+      console.log('No active alarm found to cancel for user:', userIdString);
       res.status(404).json({ error: 'No active alarm found for this user' });
     }
   } catch (error) {
@@ -187,11 +203,15 @@ app.post('/snooze-alarm', async (req, res) => {
       return res.status(400).json({ error: 'userId is required' });
     }
     
-    if (!activeAlarms.has(userId)) {
+    const userIdString = userId.toString();
+    console.log('Snoozing alarm for userId:', userIdString);
+    
+    if (!activeAlarms.has(userIdString)) {
+      console.log('No active alarm found to snooze for user:', userIdString);
       return res.status(404).json({ error: 'No active alarm found for this user' });
     }
     
-    const alarm = activeAlarms.get(userId);
+    const alarm = activeAlarms.get(userIdString);
     
     // Cancel current alarm
     clearTimeout(alarm.timeoutId);
@@ -201,21 +221,23 @@ app.post('/snooze-alarm', async (req, res) => {
     const newTimeoutId = setTimeout(async () => {
       try {
         await makeCall(alarm.phoneNumber, alarm.message);
-        activeAlarms.delete(userId);
-        console.log(`Snoozed wake up call completed for user: ${userId}`);
+        activeAlarms.delete(userIdString);
+        console.log(`Snoozed wake up call completed for user: ${userIdString}`);
       } catch (error) {
         console.error('Error during snoozed call:', error);
-        activeAlarms.delete(userId);
+        activeAlarms.delete(userIdString);
       }
     }, snoozeMs);
     
     // Update alarm info
     const newScheduledTime = moment.tz('Asia/Kolkata').add(minutes, 'minutes');
-    activeAlarms.set(userId, {
+    activeAlarms.set(userIdString, {
       ...alarm,
       timeoutId: newTimeoutId,
       scheduledTime: newScheduledTime.format('YYYY-MM-DD HH:mm:ss')
     });
+    
+    console.log('Alarm snoozed for user:', userIdString);
     
     res.json({
       success: true,
@@ -229,19 +251,53 @@ app.post('/snooze-alarm', async (req, res) => {
   }
 });
 
+// Debug endpoint to see all active alarms
+app.get('/debug/alarms', (req, res) => {
+  try {
+    const alarms = {};
+    for (const [userId, alarm] of activeAlarms.entries()) {
+      alarms[userId] = {
+        alarmId: alarm.alarmId,
+        scheduledTime: alarm.scheduledTime,
+        phoneNumber: alarm.phoneNumber,
+        message: alarm.message
+      };
+    }
+    
+    res.json({
+      totalActiveAlarms: activeAlarms.size,
+      alarms: alarms,
+      userIds: Array.from(activeAlarms.keys())
+    });
+  } catch (error) {
+    console.error('Error fetching debug alarms:', error);
+    res.status(500).json({ error: 'Failed to fetch debug alarms' });
+  }
+});
+
 // Get active alarms
 app.get('/active-alarms/:userId', (req, res) => {
   try {
     const { userId } = req.params;
     
-    if (activeAlarms.has(userId)) {
-      const alarm = activeAlarms.get(userId);
+    console.log('Checking active alarms for userId:', userId);
+    console.log('Active alarms map keys:', Array.from(activeAlarms.keys()));
+    console.log('Active alarms map size:', activeAlarms.size);
+    
+    // Convert userId to string to ensure consistent comparison
+    const userIdString = userId.toString();
+    
+    if (activeAlarms.has(userIdString)) {
+      const alarm = activeAlarms.get(userIdString);
+      console.log('Found active alarm for user:', userIdString, alarm);
       res.json({
         hasActiveAlarm: true,
         scheduledTime: alarm.scheduledTime,
-        alarmId: alarm.alarmId
+        alarmId: alarm.alarmId,
+        phoneNumber: alarm.phoneNumber // Adding this for debugging
       });
     } else {
+      console.log('No active alarm found for user:', userIdString);
       res.json({ hasActiveAlarm: false });
     }
   } catch (error) {
@@ -269,6 +325,7 @@ app.get('/', (req, res) => {
       '/cancel-alarm (POST)',
       '/snooze-alarm (POST)',
       '/active-alarms/:userId (GET)',
+      '/debug/alarms (GET)',
       '/health (GET)'
     ],
     timestamp: moment.tz('Asia/Kolkata').format()

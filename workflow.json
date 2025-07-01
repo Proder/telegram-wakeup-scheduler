@@ -30,7 +30,7 @@
             {
               "value1": "={{$node[\"Telegram Trigger\"].json[\"message\"][\"text\"]}}",
               "operation": "regex",
-              "value2": "^\\d{1,2}:\\d{2}|tomorrow|day after tomorrow"
+              "value2": "^(\\d{1,2}:\\d{2}|tomorrow|day after tomorrow|\\/[a-z]+)"
             }
           ]
         }
@@ -45,7 +45,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Extract message details\nconst message = $input.all()[0].json.message;\nconst timeText = message.text.trim();\nconst userId = message.from.id.toString();\nconst chatId = message.chat.id;\n\n// Parse different time formats\nlet timeString = timeText;\n\n// Handle commands like \"/cancel\", \"/snooze\", \"/status\"\nif (timeText.startsWith('/')) {\n  return [{\n    json: {\n      command: timeText.toLowerCase(),\n      userId: userId,\n      chatId: chatId,\n      isCommand: true\n    }\n  }];\n}\n\n// Validate time format\nconst timeRegex = /^(\\d{1,2}):(\\d{2})$/;\nconst tomorrowRegex = /tomorrow\\s+(\\d{1,2}):(\\d{2})/i;\nconst dayAfterRegex = /day after tomorrow\\s+(\\d{1,2}):(\\d{2})/i;\n\nlet isValid = false;\nlet extractedTime = '';\n\nif (tomorrowRegex.test(timeText)) {\n  isValid = true;\n  extractedTime = timeText;\n} else if (dayAfterRegex.test(timeText)) {\n  isValid = true;\n  extractedTime = timeText;\n} else if (timeRegex.test(timeText)) {\n  isValid = true;\n  extractedTime = timeText;\n}\n\n// Make sure to replace this with your actual phone number\n// Include the country code (e.g., +1 for US)\nconst phoneNumber = \"+919876543210\";\n\nreturn [{\n  json: {\n    timeString: extractedTime,\n    userId: userId,\n    chatId: chatId,\n    phoneNumber: phoneNumber,\n    message: \"Wake up! Time to start your day!\",\n    isValid: isValid,\n    isCommand: false,\n    originalText: timeText\n  }\n}];"
+        "jsCode": "// Extract message details\nconst message = $input.all()[0].json.message;\nconst timeText = message.text.trim();\nconst userId = message.from.id.toString();\nconst chatId = message.chat.id;\n\n// Handle commands like \"/cancel\", \"/snooze\", \"/status\"\nif (timeText.startsWith('/')) {\n  return [{\n    json: {\n      command: timeText.toLowerCase(),\n      userId: userId,\n      chatId: chatId,\n      isCommand: true\n    }\n  }];\n}\n\n// Validate time format\nconst timeRegex = /^(\\d{1,2}):(\\d{2})$/;\nconst tomorrowRegex = /tomorrow\\s+(\\d{1,2}):(\\d{2})/i;\nconst dayAfterRegex = /day after tomorrow\\s+(\\d{1,2}):(\\d{2})/i;\n\nlet isValid = false;\nlet extractedTime = '';\n\nif (tomorrowRegex.test(timeText)) {\n  isValid = true;\n  extractedTime = timeText;\n} else if (dayAfterRegex.test(timeText)) {\n  isValid = true;\n  extractedTime = timeText;\n} else if (timeRegex.test(timeText)) {\n  isValid = true;\n  extractedTime = timeText;\n}\n\n// Make sure to replace this with your actual phone number\n// Include the country code (e.g., +1 for US)\nconst phoneNumber = \"+919876543210\";\n\nreturn [{\n  json: {\n    timeString: extractedTime,\n    userId: userId,\n    chatId: chatId,\n    phoneNumber: phoneNumber,\n    message: \"Wake up! Time to start your day!\",\n    isValid: isValid,\n    isCommand: false,\n    originalText: timeText\n  }\n}];"
       },
       "name": "Parse Message",
       "type": "n8n-nodes-base.code",
@@ -75,23 +75,6 @@
       ]
     },
     {
-      "parameters": {
-        "conditions": {
-          "string": [
-            {
-              "value1": "={{$node[\"Parse Message\"].json[\"command\"]}}",
-              "value2": "/cancel"
-            }
-          ]
-        }
-      },
-      "name": "Command Type",
-      "type": "n8n-nodes-base.switch",
-      "typeVersion": 1,
-      "position": [
-        1120,
-        400
-      ],
       "parameters": {
         "options": {
           "allMatchingOutputs": false
@@ -136,7 +119,14 @@
             }
           ]
         }
-      }
+      },
+      "name": "Command Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        400
+      ]
     },
     {
       "parameters": {
@@ -213,6 +203,24 @@
     },
     {
       "parameters": {
+        "url": "https://telegram-wakeup-scheduler.onrender.com/active-alarms/{{$node[\"Parse Message\"].json[\"userId\"]}}",
+        "options": {
+          "headers": {
+            "Content-Type": "application/json"
+          }
+        },
+        "method": "GET"
+      },
+      "name": "Status Alarm API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        1340,
+        550
+      ]
+    },
+    {
+      "parameters": {
         "chatId": "={{$node[\"Parse Message\"].json[\"chatId\"]}}",
         "text": "=✅ Alarm set for {{$node[\"Set Alarm API\"].json[\"scheduledTime\"]}} IST\\n⏰ You'll receive a wake-up call in {{$node[\"Set Alarm API\"].json[\"delayMinutes\"]}} minutes\\n\\nCommands:\\n/cancel - Cancel alarm\\n/snooze - Snooze for 10 minutes\\n/status - Check alarm status"
       },
@@ -279,6 +287,25 @@
       "position": [
         1560,
         450
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{$node[\"Parse Message\"].json[\"chatId\"]}}",
+        "text": "={% if $node[\"Status Alarm API\"].json[\"hasActiveAlarm\"] %}\n⏰ You have an active alarm set for {{$node[\"Status Alarm API\"].json[\"scheduledTime\"]}} IST\n\nCommands:\n/cancel - Cancel alarm\n/snooze - Snooze for 10 minutes\n{% else %}\nNo active alarms found. Set one by sending a time like \"7:30\" or \"tomorrow 8:00\".\n{% endif %}"
+      },
+      "name": "Status Response",
+      "type": "n8n-nodes-base.telegram",     
+      "typeVersion": 1,
+      "position": [
+        1560,
+        550
       ],
       "credentials": {
         "telegramApi": {
@@ -362,6 +389,13 @@
             "type": "main",
             "index": 0
           }
+        ],
+        [
+          {
+            "node": "Status Alarm API",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
@@ -392,6 +426,17 @@
         [
           {
             "node": "Snooze Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Status Alarm API": {
+      "main": [
+        [
+          {
+            "node": "Status Response",
             "type": "main",
             "index": 0
           }
