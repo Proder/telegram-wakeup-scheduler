@@ -284,21 +284,49 @@ app.get('/active-alarms/:userId', (req, res) => {
     console.log('Active alarms map keys:', Array.from(activeAlarms.keys()));
     console.log('Active alarms map size:', activeAlarms.size);
     
-    // Convert userId to string to ensure consistent comparison
-    const userIdString = userId.toString();
+    // Try multiple formats to find the user
+    let foundAlarm = null;
+    let matchedUserId = null;
     
-    if (activeAlarms.has(userIdString)) {
-      const alarm = activeAlarms.get(userIdString);
-      console.log('Found active alarm for user:', userIdString, alarm);
+    // Check original userId
+    if (activeAlarms.has(userId)) {
+      foundAlarm = activeAlarms.get(userId);
+      matchedUserId = userId;
+    }
+    // Check string version
+    else if (activeAlarms.has(userId.toString())) {
+      foundAlarm = activeAlarms.get(userId.toString());
+      matchedUserId = userId.toString();
+    }
+    // Check number version (if userId is numeric)
+    else if (!isNaN(userId) && activeAlarms.has(parseInt(userId))) {
+      foundAlarm = activeAlarms.get(parseInt(userId));
+      matchedUserId = parseInt(userId);
+    }
+    // Check number as string
+    else if (!isNaN(userId) && activeAlarms.has(parseInt(userId).toString())) {
+      foundAlarm = activeAlarms.get(parseInt(userId).toString());
+      matchedUserId = parseInt(userId).toString();
+    }
+    
+    if (foundAlarm) {
+      console.log('Found active alarm for user:', matchedUserId, foundAlarm);
       res.json({
         hasActiveAlarm: true,
-        scheduledTime: alarm.scheduledTime,
-        alarmId: alarm.alarmId,
-        phoneNumber: alarm.phoneNumber // Adding this for debugging
+        scheduledTime: foundAlarm.scheduledTime,
+        alarmId: foundAlarm.alarmId,
+        phoneNumber: foundAlarm.phoneNumber,
+        matchedUserId: matchedUserId // Adding this for debugging
       });
     } else {
-      console.log('No active alarm found for user:', userIdString);
-      res.json({ hasActiveAlarm: false });
+      console.log('No active alarm found for user:', userId);
+      console.log('Searched formats:', [userId, userId.toString(), parseInt(userId), parseInt(userId).toString()]);
+      res.json({ 
+        hasActiveAlarm: false,
+        searchedUserId: userId,
+        searchedFormats: [userId, userId.toString(), parseInt(userId), parseInt(userId).toString()],
+        availableUserIds: Array.from(activeAlarms.keys())
+      });
     }
   } catch (error) {
     console.error('Error fetching active alarms:', error);
