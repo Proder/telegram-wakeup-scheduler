@@ -140,7 +140,7 @@
     },
     {
       "parameters": {
-        "url": "http://localhost:3000/set-alarm",
+        "url": "https://telegram-wakeup-scheduler.onrender.com/set-alarm",
         "options": {
           "bodyContentType": "json",
           "jsonBody": "={\n  \"timeString\": \"{{$node[\"Parse Message\"].json[\"timeString\"]}}\",\n  \"phoneNumber\": \"{{$node[\"Parse Message\"].json[\"phoneNumber\"]}}\",\n  \"message\": \"{{$node[\"Parse Message\"].json[\"message\"]}}\",\n  \"userId\": \"{{$node[\"Parse Message\"].json[\"userId\"]}}\"\n}",
@@ -160,7 +160,7 @@
     },
     {
       "parameters": {
-        "url": "http://localhost:3000/cancel-alarm",
+        "url": "https://telegram-wakeup-scheduler.onrender.com/cancel-alarm",
         "options": {
           "bodyContentType": "json",
           "jsonBody": "={\n  \"userId\": \"{{$node[\"Parse Message\"].json[\"userId\"]}}\"\n}",
@@ -180,7 +180,7 @@
     },
     {
       "parameters": {
-        "url": "http://localhost:3000/snooze-alarm",
+        "url": "https://telegram-wakeup-scheduler.onrender.com/snooze-alarm",
         "options": {
           "bodyContentType": "json",
           "jsonBody": "={\n  \"userId\": \"{{$node[\"Parse Message\"].json[\"userId\"]}}\",\n  \"minutes\": 10\n}",

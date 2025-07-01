@@ -1,9 +1,13 @@
 const express = require('express');
 const twilio = require('twilio');
 const moment = require('moment-timezone');
+const cors = require('cors');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Enable CORS for all routes
+app.use(cors());
 
 // Twilio client
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
@@ -48,6 +52,12 @@ function parseTimeInput(timeString) {
 // Make call function
 async function makeCall(phoneNumber, message = null) {
   try {
+    // Validate Twilio credentials are set
+    if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_PHONE_NUMBER) {
+      console.error('Twilio credentials not set in environment variables');
+      throw new Error('Twilio credentials not configured');
+    }
+    
     const callMessage = message || 'Wake up! This is your scheduled wake up call. Time to start your day!';
     
     const call = await twilioClient.calls.create({
@@ -59,7 +69,8 @@ async function makeCall(phoneNumber, message = null) {
     console.log(`Call initiated: ${call.sid} to ${phoneNumber}`);
     return call.sid;
   } catch (error) {
-    console.error('Error making call:', error);
+    console.error('Error making call:', error.message);
+    console.error('Full error:', error);
     throw error;
   }
 }
@@ -231,7 +242,31 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Default route
+app.get('/', (req, res) => {
+  res.json({ 
+    service: 'Telegram Wake-up Call Scheduler',
+    status: 'Running',
+    endpoints: [
+      '/set-alarm (POST)',
+      '/cancel-alarm (POST)',
+      '/snooze-alarm (POST)',
+      '/active-alarms/:userId (GET)',
+      '/health (GET)'
+    ],
+    timestamp: moment.tz('Asia/Kolkata').format()
+  });
+});
+
 app.listen(PORT, () => {
   console.log(`Webhook service running on port ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
+  
+  // Log environment check for Twilio credentials
+  if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_PHONE_NUMBER) {
+    console.warn('WARNING: Twilio credentials are not properly set in environment variables!');
+    console.warn('Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER environment variables.');
+  } else {
+    console.log('Twilio credentials loaded successfully');
+  }
 });

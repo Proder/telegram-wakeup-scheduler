@@ -10,7 +10,8 @@
   "dependencies": {
     "express": "^4.21.2",
     "moment-timezone": "^0.5.48",
-    "twilio": "^4.23.0"
+    "twilio": "^4.23.0",
+    "cors": "^2.8.5"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
