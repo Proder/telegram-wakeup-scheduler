@@ -45,7 +45,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Extract message details\nconst message = $input.all()[0].json.message;\nconst timeText = message.text.trim();\nconst userId = message.from.id.toString();\nconst chatId = message.chat.id;\n\n// Parse different time formats\nlet timeString = timeText;\n\n// Handle commands like \"/cancel\", \"/snooze\", \"/status\"\nif (timeText.startsWith('/')) {\n  return [{\n    json: {\n      command: timeText.toLowerCase(),\n      userId: userId,\n      chatId: chatId,\n      isCommand: true\n    }\n  }];\n}\n\n// Validate time format\nconst timeRegex = /^(\\d{1,2}):(\\d{2})$/;\nconst tomorrowRegex = /tomorrow\\s+(\\d{1,2}):(\\d{2})/i;\nconst dayAfterRegex = /day after tomorrow\\s+(\\d{1,2}):(\\d{2})/i;\n\nlet isValid = false;\nlet extractedTime = '';\n\nif (tomorrowRegex.test(timeText)) {\n  isValid = true;\n  extractedTime = timeText;\n} else if (dayAfterRegex.test(timeText)) {\n  isValid = true;\n  extractedTime = timeText;\n} else if (timeRegex.test(timeText)) {\n  isValid = true;\n  extractedTime = timeText;\n}\n\nreturn [{\n  json: {\n    timeString: extractedTime,\n    userId: userId,\n    chatId: chatId,\n    phoneNumber: \"+919876543210\", // Replace with your phone number\n    message: \"Wake up! Time to start your day!\",\n    isValid: isValid,\n    isCommand: false,\n    originalText: timeText\n  }\n}];"
+        "jsCode": "// Extract message details\nconst message = $input.all()[0].json.message;\nconst timeText = message.text.trim();\nconst userId = message.from.id.toString();\nconst chatId = message.chat.id;\n\n// Parse different time formats\nlet timeString = timeText;\n\n// Handle commands like \"/cancel\", \"/snooze\", \"/status\"\nif (timeText.startsWith('/')) {\n  return [{\n    json: {\n      command: timeText.toLowerCase(),\n      userId: userId,\n      chatId: chatId,\n      isCommand: true\n    }\n  }];\n}\n\n// Validate time format\nconst timeRegex = /^(\\d{1,2}):(\\d{2})$/;\nconst tomorrowRegex = /tomorrow\\s+(\\d{1,2}):(\\d{2})/i;\nconst dayAfterRegex = /day after tomorrow\\s+(\\d{1,2}):(\\d{2})/i;\n\nlet isValid = false;\nlet extractedTime = '';\n\nif (tomorrowRegex.test(timeText)) {\n  isValid = true;\n  extractedTime = timeText;\n} else if (dayAfterRegex.test(timeText)) {\n  isValid = true;\n  extractedTime = timeText;\n} else if (timeRegex.test(timeText)) {\n  isValid = true;\n  extractedTime = timeText;\n}\n\n// Make sure to replace this with your actual phone number\n// Include the country code (e.g., +1 for US)\nconst phoneNumber = \"+919876543210\";\n\nreturn [{\n  json: {\n    timeString: extractedTime,\n    userId: userId,\n    chatId: chatId,\n    phoneNumber: phoneNumber,\n    message: \"Wake up! Time to start your day!\",\n    isValid: isValid,\n    isCommand: false,\n    originalText: timeText\n  }\n}];"
       },
       "name": "Parse Message",
       "type": "n8n-nodes-base.code",
@@ -143,7 +143,13 @@
         "url": "https://telegram-wakeup-scheduler.onrender.com/set-alarm",
         "options": {
           "bodyContentType": "json",
-          "jsonBody": "={\n  \"timeString\": \"{{$node[\"Parse Message\"].json[\"timeString\"]}}\",\n  \"phoneNumber\": \"{{$node[\"Parse Message\"].json[\"phoneNumber\"]}}\",\n  \"message\": \"{{$node[\"Parse Message\"].json[\"message\"]}}\",\n  \"userId\": \"{{$node[\"Parse Message\"].json[\"userId\"]}}\"\n}",
+          "jsonParameters": true,
+          "body": {
+            "timeString": "={{$node[\"Parse Message\"].json[\"timeString\"]}}",
+            "phoneNumber": "={{$node[\"Parse Message\"].json[\"phoneNumber\"]}}",
+            "message": "={{$node[\"Parse Message\"].json[\"message\"]}}",
+            "userId": "={{$node[\"Parse Message\"].json[\"userId\"]}}"
+          },
           "headers": {
             "Content-Type": "application/json"
           }
@@ -163,7 +169,10 @@
         "url": "https://telegram-wakeup-scheduler.onrender.com/cancel-alarm",
         "options": {
           "bodyContentType": "json",
-          "jsonBody": "={\n  \"userId\": \"{{$node[\"Parse Message\"].json[\"userId\"]}}\"\n}",
+          "jsonParameters": true,
+          "body": {
+            "userId": "={{$node[\"Parse Message\"].json[\"userId\"]}}"
+          },
           "headers": {
             "Content-Type": "application/json"
           }
@@ -183,7 +192,11 @@
         "url": "https://telegram-wakeup-scheduler.onrender.com/snooze-alarm",
         "options": {
           "bodyContentType": "json",
-          "jsonBody": "={\n  \"userId\": \"{{$node[\"Parse Message\"].json[\"userId\"]}}\",\n  \"minutes\": 10\n}",
+          "jsonParameters": true,
+          "body": {
+            "userId": "={{$node[\"Parse Message\"].json[\"userId\"]}}",
+            "minutes": 10
+          },
           "headers": {
             "Content-Type": "application/json"
           }

@@ -12,6 +12,12 @@ app.use(cors());
 // Twilio client
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
+// Add request logging middleware
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} | ${req.method} ${req.url}`);
+  next();
+});
+
 app.use(express.json());
 
 // Store active timeouts in memory (will reset on server restart)
@@ -78,11 +84,22 @@ async function makeCall(phoneNumber, message = null) {
 // Set alarm endpoint
 app.post('/set-alarm', async (req, res) => {
   try {
+    console.log('Received set-alarm request:', JSON.stringify(req.body));
+    
     const { timeString, phoneNumber, message, userId } = req.body;
     
     if (!timeString || !phoneNumber) {
+      console.error('Missing required fields:', { timeString, phoneNumber });
       return res.status(400).json({ 
         error: 'Missing required fields: timeString and phoneNumber' 
+      });
+    }
+
+    // Validate phone number format (simple validation)
+    if (!phoneNumber.startsWith('+')) {
+      console.error('Invalid phone number format (must start with +):', phoneNumber);
+      return res.status(400).json({
+        error: 'Invalid phone number format. Must include country code and start with +'
       });
     }
 
