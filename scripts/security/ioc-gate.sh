@@ -12,14 +12,25 @@ warnings=0
 tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/ioc-gate.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT
 
-tracked="$tmpdir/tracked.txt"
-changed="$tmpdir/changed.txt"
+tracked="$tmpdir/tracked.bin"
+changed="$tmpdir/changed.bin"
 
-git ls-files | LC_ALL=C sort -u > "$tracked"
+git ls-files -z | LC_ALL=C sort -zu > "$tracked"
+
+is_exact_scan_eligible() {
+  case "$1" in
+    "$gate_path"|security/evidence/*|security/incidents/*)
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
 
 is_scannable() {
   case "$1" in
-    "$gate_path"|security/evidence/*|security/incidents/*|*.min.js|*.map|*.lock|package-lock.json|pnpm-lock.yaml|yarn.lock)
+    "$gate_path"|security/evidence/*|security/incidents/*|node_modules/*|*/node_modules/*|vendor/*|*/vendor/*|dist/*|*/dist/*|build/*|*/build/*|.next/*|*/.next/*|generated/*|*/generated/*|__generated__/*|*/__generated__/*|*.min.js|*.map|*.lock|package-lock.json|pnpm-lock.yaml|yarn.lock)
       return 1
       ;;
     *.js|*.cjs|*.mjs|*.jsx|*.ts|*.tsx|*.json|*.sh|*.bash|*.zsh|*.yml|*.yaml|*.toml|*.config|*.gradle|*.dart|*.py|*.rb|*.go|*.rs|*.java|*.kt|*.swift)
@@ -46,44 +57,46 @@ is_handwritten_script() {
 }
 
 report() {
-  printf 'IOC gate: %s: %s\n' "$1" "$2" >&2
+  printf 'IOC gate: %q: %s\n' "$1" "$2" >&2
   failures=$((failures + 1))
 }
 
 warn() {
-  printf 'IOC gate warning: %s: %s\n' "$1" "$2" >&2
+  printf 'IOC gate warning: %q: %s\n' "$1" "$2" >&2
   warnings=$((warnings + 1))
 }
 
-while IFS= read -r file; do
-  is_scannable "$file" || continue
+while IFS= read -r -d '' file; do
   [ -f "$file" ] || continue
 
   if LC_ALL=C grep -Iq . "$file" 2>/dev/null; then
-    if LC_ALL=C grep -Eq "global[.]o[[:space:]]*=" "$file"; then
-      report "$file" "loader marker assignment detected"
+    if is_exact_scan_eligible "$file"; then
+      if LC_ALL=C grep -Eq "global[.]o[[:space:]]*=" "$file"; then
+        report "$file" "loader marker assignment detected"
+      fi
+
+      if LC_ALL=C grep -Eq "['\"]5-[0-9]+-[0-9]+-du['\"]" "$file"; then
+        report "$file" "known loader-family marker detected"
+      fi
     fi
 
-    if LC_ALL=C grep -Eq "['\"]5-[0-9]+-[0-9]+-du['\"]" "$file"; then
-      report "$file" "known loader-family marker detected"
-    fi
+    if is_scannable "$file"; then
+      if LC_ALL=C grep -Eq "eval[[:space:]]*[(]" "$file" && \
+         LC_ALL=C grep -Eq "atob[[:space:]]*[(]|Buffer[.]from[^;]*(base64|base64url)" "$file"; then
+        report "$file" "eval and Base64 decoder occur in the same file"
+      fi
 
-    if LC_ALL=C grep -Eq "eval[[:space:]]*[(]" "$file" && \
-       LC_ALL=C grep -Eq "atob[[:space:]]*[(]|Buffer[.]from[^;]*(base64|base64url)" "$file"; then
-      report "$file" "eval and Base64 decoder occur in the same file"
+      if LC_ALL=C grep -Eq "createRequire|module[.]createRequire" "$file" && \
+         LC_ALL=C awk 'length($0) >= 1500 && $0 ~ /[A-Za-z0-9+\/_=-]{1200}/ {found=1} END {exit !found}' "$file"; then
+        report "$file" "createRequire shim combined with a large encoded-looking line"
+      fi
     fi
-
-    if LC_ALL=C grep -Eq "createRequire|module[.]createRequire" "$file" && \
-       LC_ALL=C awk 'length($0) >= 1500 && $0 ~ /[A-Za-z0-9+\/_=-]{1200}/ {found=1} END {exit !found}' "$file"; then
-      report "$file" "createRequire shim combined with a large encoded-looking line"
-    fi
-
   fi
 done < "$tracked"
 
 base=${IOC_BASE_SHA:-}
 if [ -n "$base" ] && [ "$base" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
-  git diff --name-only --diff-filter=ACMR "$base...HEAD" | LC_ALL=C sort -u > "$changed"
+  git diff --name-only -z --diff-filter=ACMR "$base...HEAD" | LC_ALL=C sort -zu > "$changed"
 else
   cp "$tracked" "$changed"
 fi
@@ -91,7 +104,7 @@ fi
 suffixes="$tmpdir/suffixes.tsv"
 : > "$suffixes"
 
-while IFS= read -r file; do
+while IFS= read -r -d '' file; do
   is_scannable "$file" || continue
   [ -f "$file" ] || continue
   LC_ALL=C grep -Iq . "$file" 2>/dev/null || continue
