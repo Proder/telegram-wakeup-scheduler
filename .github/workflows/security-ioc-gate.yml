@@ -3,6 +3,10 @@ name: Security IOC Gate
 on:
   pull_request:
   push:
+    branches:
+      - main
+      - dev
+      - "release/**"
 
 permissions:
   contents: read
@@ -23,4 +27,3 @@ jobs:
         env:
           IOC_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: bash scripts/security/ioc-gate.sh
-

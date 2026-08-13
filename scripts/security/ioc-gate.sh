@@ -31,6 +31,20 @@ is_scannable() {
   esac
 }
 
+is_handwritten_script() {
+  case "$1" in
+    */node_modules/*|*/vendor/*|*/dist/*|*/build/*|*/.next/*|*/generated/*|*/__generated__/*|*.generated.js|*.generated.ts|*.min.js)
+      return 1
+      ;;
+    *.js|*.cjs|*.mjs|*.jsx|*.ts|*.tsx)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 report() {
   printf 'IOC gate: %s: %s\n' "$1" "$2" >&2
   failures=$((failures + 1))
@@ -63,6 +77,7 @@ while IFS= read -r file; do
        LC_ALL=C awk 'length($0) >= 1500 && $0 ~ /[A-Za-z0-9+\/_=-]{1200}/ {found=1} END {exit !found}' "$file"; then
       report "$file" "createRequire shim combined with a large encoded-looking line"
     fi
+
   fi
 done < "$tracked"
 
@@ -80,6 +95,25 @@ while IFS= read -r file; do
   is_scannable "$file" || continue
   [ -f "$file" ] || continue
   LC_ALL=C grep -Iq . "$file" 2>/dev/null || continue
+
+  if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null && \
+     is_handwritten_script "$file" && \
+     LC_ALL=C grep -Eq "createRequire|module[.]createRequire" "$file"; then
+    if ! git show "$base:$file" 2>/dev/null | LC_ALL=C grep -Eq "createRequire|module[.]createRequire"; then
+      report "$file" "new createRequire/module.createRequire shim introduced"
+    fi
+  fi
+
+  if is_handwritten_script "$file"; then
+    current_max=$(LC_ALL=C awk '{if (length($0) > max) max=length($0)} END {print max+0}' "$file")
+    base_max=0
+    if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+      base_max=$(git show "$base:$file" 2>/dev/null | LC_ALL=C awk '{if (length($0) > max) max=length($0)} END {print max+0}')
+    fi
+    if [ "$current_max" -ge 6000 ] && { [ "$base_max" -lt 6000 ] || [ $((current_max - base_max)) -ge 4000 ]; }; then
+      report "$file" "new or expanded hand-written source line is at least 6000 bytes"
+    fi
+  fi
 
   if LC_ALL=C awk 'length($0) >= 2000 && $0 ~ /[A-Za-z0-9+\/_=-]{1600}/ {found=1} END {exit !found}' "$file"; then
     warn "$file" "unusually long encoded-looking line added or modified"
